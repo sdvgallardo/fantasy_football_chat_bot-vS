@@ -4,7 +4,7 @@ import os
 import random
 from datetime import datetime
 from apscheduler.schedulers.blocking import BlockingScheduler
-from espn_api.football import League
+from espn_api.baseball import League
 
 class GroupMeException(Exception):
     pass
@@ -115,9 +115,9 @@ def random_phrase():
 
 def get_scoreboard_short(league, week=None):
     #Gets current week's scoreboard
-    box_scores = league.box_scores(week=week)
-    score = ['%s %.2f - %.2f %s' % (i.home_team.team_abbrev, i.home_score,
-             i.away_score, i.away_team.team_abbrev) for i in box_scores
+    box_scores = league.scoreboard(matchupPeriod=week)
+    score = ['%s %.2f - %.2f %s' % (i.home_team.team_abbrev, i.home_team_live_score,
+             i.away_team_live_score, i.away_team.team_abbrev) for i in box_scores
              if i.away_team]
     text = ['**Score Update:** '] + score
     return '\n'.join(text)
@@ -137,11 +137,11 @@ def get_standings(league, top_half_scoring, week=None):
     standings = []
     if not top_half_scoring:
         for t in teams:
-            standings.append((t.wins, t.losses, t.team_name))
+            standings.append((t.wins, t.losses, t.ties, t.team_name))
 
         standings = sorted(standings, key=lambda tup: tup[0], reverse=True)
-        standings_txt = [f"{pos + 1}: {'**'+team_name+'**'} ({wins} - {losses})" for \
-            pos, (wins, losses, team_name) in enumerate(standings)]
+        standings_txt = [f"{pos + 1}: {'**'+team_name+'**'} ({wins} - {losses} - {ties})" for \
+            pos, (wins, losses, ties, team_name) in enumerate(standings)]
     else:
         top_half_totals = {t.team_name: 0 for t in teams}
         if not week:
@@ -224,10 +224,10 @@ def scan_inactives(lineup, team_id):
 
 def get_matchups(league, week=None):
     #Gets current week's Matchups
-    matchups = league.box_scores(week=week)
+    matchups = league.box_scores(matchup_period=week)
 
-    score = ['%s (%s-%s) vs %s (%s-%s)' % (i.home_team.team_name, i.home_team.wins, i.home_team.losses,
-             i.away_team.team_name, i.away_team.wins, i.away_team.losses) for i in matchups
+    score = ['%s (%s-%s-%s) vs %s (%s-%s-%s)' % (i.home_team.team_name, i.home_team.wins, i.home_team.losses, i.home_team.ties,
+             i.away_team.team_name, i.away_team.wins, i.away_team.losses, i.away_team.ties) for i in matchups
              if i.away_team]
     text = ['**Weekly Matchups:** '] + score + [' '] + random_phrase()
     return '\n'.join(text)
@@ -277,84 +277,6 @@ def get_waiver_report(league):
         text = ['**Waiver Report %s:** ' % date] + report + [' '] + random_phrase()
 
     return '\n'.join(text)
-
-def get_power_rankings(league, week=None):
-    # power rankings requires an integer value, so this grabs the current week for that
-    if not week:
-        week = league.current_week
-    #Gets current week's power rankings
-    #Using 2 step dominance, as well as a combination of points scored and margin of victory.
-    #It's weighted 80/15/5 respectively
-    power_rankings = league.power_rankings(week=week)
-
-    ranks = ['%s - %s' % (i[0], i[1].team_name) for i in power_rankings
-             if i]
-
-    text = ['**Power Rankings:** '] + ranks
-
-    return '\n'.join(text)
-
-def get_expected_win(league, week=None):
-    if not week:
-        week = league.current_week
-
-    win_percent = expected_win_percent(league, week=week)
-
-    wins = ['%s - %s' % (i[0], i[1].team_name) for i in win_percent
-             if i]
-
-    text = ['**Expected Win %:** '] + wins + [' '] + random_phrase()
-
-    return '\n'.join(text)
-
-def expected_win_percent(league, week):
-    #This script gets power rankings, given an already-connected league and a week to look at. Requires espn_api
-
-    #Get what week most recently passed
-    lastWeek = league.current_week
-
-    if week:
-        lastWeek = week
-
-    #initialize dictionaries to stash the projected record/expected wins for each week, and to stash each team's score for each week
-    projRecDicts = {i: {x: None for x in league.teams} for i in range(lastWeek)}
-    teamScoreDicts = {i: {x: None for x in league.teams} for i in range(lastWeek)}
-
-    #initialize the dictionary for the final power ranking
-    powerRankingDict = {x: 0. for x in league.teams}
-
-
-    for i in range(lastWeek): #for each week that has been played
-        weekNumber = i+1      #set the week
-        boxes = league.box_scores(weekNumber)	#pull box scores from that week
-        for box in boxes:							#for each boxscore
-            teamScoreDicts[i][box.home_team] = box.home_score	#plug the home team's score into the dict
-            teamScoreDicts[i][box.away_team] = box.away_score	#and the away team's
-
-        for team in teamScoreDicts[i].keys():		#for each team
-            wins = 0
-            losses = 0
-            ties = 0
-            oppCount = len(list(teamScoreDicts[i].keys()))-1
-            for opp in teamScoreDicts[i].keys():		#for each potential opponent
-                if team==opp:							#skip yourself
-                    continue
-                if teamScoreDicts[i][team] > teamScoreDicts[i][opp]:	#win case
-                    wins += 1
-                if teamScoreDicts[i][team] < teamScoreDicts[i][opp]:	#loss case
-                    losses += 1
-
-            if wins + losses != oppCount:			#in case of an unlikely tie
-                ties = oppCount - wins - losses
-
-            projRecDicts[i][team] = (float(wins) + (0.5*float(ties)))/float(oppCount) #store the team's projected record for that week
-
-    for team in powerRankingDict.keys():			#for each team
-        powerRankingDict[team] = sum([projRecDicts[i][team] for i in range(lastWeek)])/float(lastWeek) #total up the expected wins from each week, divide by the number of weeks
-
-    powerRankingDictSortedTemp = {k: v for k, v in sorted(powerRankingDict.items(), key=lambda item: item[1],reverse=True)} #sort for presentation purposes
-    powerRankingDictSorted = {x: ('{:.3f}'.format(powerRankingDictSortedTemp[x])) for x in powerRankingDictSortedTemp.keys()}  #put into a prettier format
-    return [(powerRankingDictSorted[x],x) for x in powerRankingDictSorted.keys()]    #return in the format that the bot expects
 
 def get_trophies(league, week=None):
     #Gets trophies for highest score, lowest score, closest score, and biggest win
@@ -506,15 +428,16 @@ def bot_main(function):
 #        league = League(league_id=league_id, year=year, username=espn_username, password=espn_password)
 
     if test:
+        # print(league.scoreboard)
         print(get_matchups(league,random_phrase))
-        print(get_scoreboard_short(league))
-        print(get_projected_scoreboard(league))
-        print(get_close_scores(league))
-        print(get_power_rankings(league))
-        print(get_scoreboard_short(league))
+        # print(get_scoreboard_short(league))
+        # # print(get_projected_scoreboard(league))
+        # # print(get_close_scores(league))
+        # # print(get_power_rankings(league))
+        # # print(get_scoreboard_short(league))
         print(get_standings(league, top_half_scoring))
-        function="get_final"
-        bot.send_message("Testing")
+        # function="get_final"
+        # bot.send_message("Testing")
         # slack_bot.send_message("Testing")
         # discord_bot.send_message("Testing")
 
@@ -591,81 +514,14 @@ if __name__ == '__main__':
     sched = BlockingScheduler(job_defaults={'misfire_grace_time': 15*60})
 
     #regular schedule:
-    #game day score update:              sunday at 4pm, 8pm east coast time.
-    #matchups:                           thursday evening at 7:30pm east coast time.
-    #inactives:                          thursday evening at 7:35pm east coast time.
-    sched.add_job(bot_main, 'cron', ['get_scoreboard_short'], id='scoreboard2',
-        day_of_week='sun', hour='16,20', start_date=ff_start_date, end_date=ff_end_date,
-        timezone=game_timezone, replace_existing=True)
+    #standings:             monday at 8:30am local time
+    #matchups:              monday at 8:30am local time
+    sched.add_job(bot_main, 'cron', ['get_standings'], id='standings',
+        day_of_week='mon', hour=8, minute=30, start_date=ff_start_date, end_date=ff_end_date,
+        timezone=my_timezone, replace_existing=True)
     sched.add_job(bot_main, 'cron', ['get_matchups'], id='matchups',
-        day_of_week='thu', hour=18, minute=30, start_date=ff_start_date, end_date=ff_end_date,
-        timezone=game_timezone, replace_existing=True)
-    sched.add_job(bot_main, 'cron', ['get_inactives'], id='inactives',
-        day_of_week='thu', hour=18, minute=35, start_date=ff_start_date, end_date=ff_end_date,
-        timezone=game_timezone, replace_existing=True)
+        day_of_week='mon', hour=8, minute=30, start_date=ff_start_date, end_date=ff_end_date,
+        timezone=my_timezone, replace_existing=True)
 
-    #schedule without a COVID delay:
-    #score update:                       friday and monday morning at 7:30am local time.
-    #close scores (within 15.99 points): monday evening at 6:30pm east coast time.
-    #final scores and trophies:          tuesday morning at 7:30am local time.
-    #standings:                          tuesday evening at 6:30pm local time.
-    #power rankings:                     tuesday evening at 6:30:10pm local time.
-    #expected win:                       tuesday evening at 6:30:20pm local time.
-    #waiver report:                      wednesday morning at 8am local time.
-    if tues_sched=='0':
-        ready_text = "Ready! Regular schedule set."
-        sched.add_job(bot_main, 'cron', ['get_scoreboard_short'], id='scoreboard1',
-            day_of_week='fri,mon', hour=7, minute=30, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=my_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_close_scores'], id='close_scores',
-            day_of_week='mon', hour=18, minute=30, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=game_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_final'], id='final',
-            day_of_week='tue', hour=7, minute=30, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=my_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_standings'], id='standings',
-            day_of_week='tue', hour=18, minute=30, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=my_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_power_rankings'], id='power_rankings',
-            day_of_week='tue', hour=18, minute=30, second=10, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=my_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_expected_win'], id='expected_win',
-            day_of_week='tue', hour=18, minute=30, second=15, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=my_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_waiver_report'], id='waiver_report',
-            day_of_week='wed', hour=8, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=game_timezone, replace_existing=True)
-
-    #schedule with a COVID delay to tuesday:
-    #extra score update:                 tuesday morning at 7:30am local time.
-    #final scores and trophies:          wednesday morning at 7:30am local time.
-    #standings:                          wednesday evening at 6:30pm local time.
-    #power rankings:                     wednesday evening at 6:30:10pm local time.
-    #expected win:                       wednesday evening at 6:30:20pm local time.
-    #waiver report:                      thursday morning at 8am local time.
-    else:
-        ready_text = "Ready! Tuesday schedule set."
-        sched.add_job(bot_main, 'cron', ['get_scoreboard_short'], id='scoreboard1',
-            day_of_week='fri,mon,tue', hour=7, minute=30, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=my_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_close_scores'], id='close_scores',
-            day_of_week='mon,tue', hour=18, minute=30, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=game_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_final'], id='final',
-            day_of_week='wed', hour=7, minute=30, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=my_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_standings'], id='standings',
-            day_of_week='wed', hour=18, minute=30, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=my_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_power_rankings'], id='power_rankings',
-            day_of_week='wed', hour=18, minute=30, second=10, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=my_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_expected_win'], id='expected_win',
-            day_of_week='wed', hour=18, minute=30, second=15, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=my_timezone, replace_existing=True)
-        sched.add_job(bot_main, 'cron', ['get_waiver_report'], id='waiver_report',
-            day_of_week='thu', hour=8, start_date=ff_start_date, end_date=ff_end_date,
-            timezone=game_timezone, replace_existing=True)
-
-    print(ready_text)
+    print("Ready!")
     sched.start()
